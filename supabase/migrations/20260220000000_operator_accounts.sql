@@ -14,6 +14,10 @@ CREATE INDEX IF NOT EXISTS idx_crm_operator_accounts_tenant ON crm_operator_acco
 
 ALTER TABLE crm_operator_accounts ENABLE ROW LEVEL SECURITY;
 
+-- Удаляем политики, если уже есть (чтобы миграцию можно было запускать повторно).
+DROP POLICY IF EXISTS crm_operator_accounts_select_own ON crm_operator_accounts;
+DROP POLICY IF EXISTS crm_operator_accounts_tenant_all ON crm_operator_accounts;
+
 -- Оператор видит только свою строку (по auth_user_id = auth.uid()).
 CREATE POLICY crm_operator_accounts_select_own ON crm_operator_accounts
   FOR SELECT USING (auth_user_id = auth.uid());
