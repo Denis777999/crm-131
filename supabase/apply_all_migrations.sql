@@ -1,3 +1,9 @@
+-- =============================================================================
+-- Применить все миграции CRM в Supabase (один запуск в SQL Editor).
+-- Порядок: схема CRM → операторы/доступы → цели → доп. колонки.
+-- =============================================================================
+
+-- ---------- 1. CRM schema (20260215000000) ----------
 -- CRM schema: all entities with RLS by auth.uid()
 -- Run in Supabase SQL Editor or via supabase db push
 
@@ -216,7 +222,7 @@ ALTER TABLE crm_shift_bonuses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm_operator_photos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm_settings ENABLE ROW LEVEL SECURITY;
 
--- Policies: user can only access own rows (DROP IF EXISTS позволяет запускать миграцию повторно)
+-- Policies: user can only access own rows
 DROP POLICY IF EXISTS crm_operators_policy ON crm_operators;
 DROP POLICY IF EXISTS crm_responsible_policy ON crm_responsible;
 DROP POLICY IF EXISTS crm_models_policy ON crm_models;
@@ -254,3 +260,104 @@ CREATE POLICY crm_shift_earnings_policy ON crm_shift_earnings FOR ALL USING (use
 CREATE POLICY crm_shift_bonuses_policy ON crm_shift_bonuses FOR ALL USING (user_id = auth.uid());
 CREATE POLICY crm_operator_photos_policy ON crm_operator_photos FOR ALL USING (user_id = auth.uid());
 CREATE POLICY crm_settings_policy ON crm_settings FOR ALL USING (user_id = auth.uid());
+
+-- ---------- 2. Operator accounts (20260220000000_operator_accounts) ----------
+CREATE TABLE IF NOT EXISTS crm_operator_accounts (
+  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  tenant_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  operator_id text NOT NULL,
+  operator_full_name text NOT NULL DEFAULT '',
+  created_at timestamptz DEFAULT now(),
+  UNIQUE(tenant_user_id, operator_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_crm_operator_accounts_tenant ON crm_operator_accounts(tenant_user_id);
+
+ALTER TABLE crm_operator_accounts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS crm_operator_accounts_select_own ON crm_operator_accounts;
+DROP POLICY IF EXISTS crm_operator_accounts_tenant_all ON crm_operator_accounts;
+
+CREATE POLICY crm_operator_accounts_select_own ON crm_operator_accounts
+  FOR SELECT USING (auth_user_id = auth.uid());
+
+CREATE POLICY crm_operator_accounts_tenant_all ON crm_operator_accounts
+  FOR ALL USING (tenant_user_id = auth.uid());
+
+-- ---------- 3. Operators status (20260220000000_crm_operators_status) ----------
+ALTER TABLE crm_operators
+ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'работает';
+
+-- ---------- 4. Operator shifts RLS (20260220100000_operator_shifts_rls) ----------
+DROP POLICY IF EXISTS crm_shifts_operator_select ON crm_shifts;
+CREATE POLICY crm_shifts_operator_select ON crm_shifts
+  FOR SELECT
+  USING (
+    user_id IN (
+      SELECT tenant_user_id FROM crm_operator_accounts WHERE auth_user_id = auth.uid()
+    )
+  );
+
+-- ---------- 5. Model responsible operator (20260226000000) ----------
+ALTER TABLE crm_model_info
+  ADD COLUMN IF NOT EXISTS responsible_operator_id text;
+
+-- ---------- 6. CRM operators access (20260226100000) ----------
+ALTER TABLE crm_operators
+  ADD COLUMN IF NOT EXISTS crm_access_login text,
+  ADD COLUMN IF NOT EXISTS crm_access_password text;
+
+-- ---------- 7. Shift check_calculated (20260227000000) ----------
+ALTER TABLE crm_shifts
+  ADD COLUMN IF NOT EXISTS check_calculated text;
+
+COMMENT ON COLUMN crm_shifts.check_calculated IS 'Расчёт бота: сумма жетонов / 20 в долларах';
+
+-- ---------- 8. Goals (20260228000000) ----------
+CREATE TABLE IF NOT EXISTS goals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  teams integer NOT NULL DEFAULT 0,
+  week_revenue integer NOT NULL DEFAULT 0,
+  month_revenue integer NOT NULL DEFAULT 0,
+  staff integer NOT NULL DEFAULT 0,
+  current_teams integer NOT NULL DEFAULT 0,
+  current_week_revenue integer NOT NULL DEFAULT 0,
+  current_month_revenue integer NOT NULL DEFAULT 0,
+  current_staff integer NOT NULL DEFAULT 0,
+  updated_at timestamptz DEFAULT now()
+);
+
+ALTER TABLE goals ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated users can read goals" ON goals;
+DROP POLICY IF EXISTS "Authenticated users can update goals" ON goals;
+DROP POLICY IF EXISTS "Authenticated users can insert goals" ON goals;
+
+CREATE POLICY "Authenticated users can read goals"
+  ON goals FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "Authenticated users can update goals"
+  ON goals FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can insert goals"
+  ON goals FOR INSERT TO authenticated WITH CHECK (true);
+
+INSERT INTO goals (
+  teams, week_revenue, month_revenue, staff,
+  current_teams, current_week_revenue, current_month_revenue, current_staff
+)
+SELECT 0, 0, 0, 0, 0, 0, 0, 0
+WHERE NOT EXISTS (SELECT 1 FROM goals LIMIT 1);
+
+COMMENT ON TABLE goals IS 'Единственная запись с целями и текущими показателями для дашборда';
+
+-- ---------- 9. Goals add current columns (20260228100000) ----------
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS current_teams integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS current_week_revenue integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS current_month_revenue integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS current_staff integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS teams integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS week_revenue integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS month_revenue integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS staff integer NOT NULL DEFAULT 0;
+ALTER TABLE goals ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();

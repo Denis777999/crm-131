@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { loadModels as loadModelsDb, saveModels as saveModelsDb, loadPairs, savePairs, loadPairInfo, loadModelPhotos, DEFAULT_MODELS, type PairRecord, type ModelRow } from '@/lib/crmDb'
+import { loadModels as loadModelsDb, saveModels as saveModelsDb, loadPairs, savePairs, loadPairInfo, loadModelPhotos, loadModelsByResponsibleOperator, loadModelResponsibleMap, loadOperators, DEFAULT_MODELS, type PairRecord, type ModelRow } from '@/lib/crmDb'
+import { useResponsibleRole } from '@/contexts/ResponsibleRoleContext'
 
 export type { PairRecord, ModelRow }
 
@@ -57,6 +58,7 @@ function CloseIcon({ className }: { className?: string }) {
   )
 }
 
+// Мок только для начального отображения до загрузки; после загрузки всегда используем данные из Supabase
 const MOCK_MODELS: ModelRow[] = DEFAULT_MODELS.map((m, i) => ({ ...m, number: i + 1 }))
 
 function getStatusDisplay(status: string): string {
@@ -125,10 +127,13 @@ function ModelPhotoCell({ modelId }: { modelId: string }) {
 }
 
 export default function ModelsPage() {
+  const { isResponsibleRole, responsibleOperatorId } = useResponsibleRole()
   const [search, setSearch] = useState('')
-  const [models, setModels] = useState<ModelRow[]>(() =>
-    MOCK_MODELS.map((m, i) => ({ ...m, number: i + 1 }))
-  )
+  const [models, setModels] = useState<ModelRow[]>([])
+  const [pairs, setPairs] = useState<PairRecord[]>([])
+  const [pairStatuses, setPairStatuses] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [selectedToDeleteId, setSelectedToDeleteId] = useState<string | null>(null)
   const [addModalOpen, setAddModalOpen] = useState(false)
@@ -136,25 +141,63 @@ export default function ModelsPage() {
   const [statusFilter, setStatusFilter] = useState<'Стажировка' | 'Работает' | 'Слив' | null>(null)
   const [pairModalOpen, setPairModalOpen] = useState(false)
   const [selectedForPair, setSelectedForPair] = useState<string[]>([])
-  const [pairs, setPairs] = useState<PairRecord[]>([])
-  const [pairStatuses, setPairStatuses] = useState<Record<string, string>>({})
+  const [modelResponsibleMap, setModelResponsibleMap] = useState<Record<string, string | null>>({})
+  const [operatorsForResponsible, setOperatorsForResponsible] = useState<{ id: string; fullName: string }[]>([])
   const router = useRouter()
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([loadModelsDb(), loadPairs()]).then(async ([modelList, pairList]) => {
+    setLoadError(null)
+    setLoading(true)
+    const loadData = async () => {
+      const [modelList, pairList] = await Promise.all([loadModelsDb(), loadPairs()])
       if (cancelled) return
-      setModels(modelList.length > 0 ? modelList : MOCK_MODELS)
-      setPairs(pairList)
-      const statuses: Record<string, string> = {}
-      await Promise.all(pairList.map(async (p) => {
-        const info = await loadPairInfo(p.id)
-        statuses[p.id] = info.status
-      }))
-      if (!cancelled) setPairStatuses(statuses)
-    })
+      let filteredModels = modelList
+      let filteredPairs = pairList
+      if (isResponsibleRole && responsibleOperatorId) {
+        const byResp = await loadModelsByResponsibleOperator(responsibleOperatorId)
+        const allowedIds = new Set(byResp.map((r) => r.modelId))
+        filteredModels = modelList.filter((m) => allowedIds.has(m.id))
+        filteredPairs = pairList.filter((p) => p.modelIds.every((id) => allowedIds.has(String(id))))
+      }
+      setModels(filteredModels)
+        setPairs(filteredPairs)
+        const statuses: Record<string, string> = {}
+        await Promise.all(filteredPairs.map(async (p) => {
+          const info = await loadPairInfo(p.id)
+          statuses[p.id] = info.status
+        }))
+        if (!cancelled) setPairStatuses(statuses)
+        if (filteredModels.length > 0) {
+          if (isResponsibleRole && responsibleOperatorId) {
+            const ops = await loadOperators()
+            if (!cancelled) {
+              setOperatorsForResponsible(ops)
+              const map: Record<string, string | null> = {}
+              for (const m of filteredModels) map[m.id] = responsibleOperatorId
+              setModelResponsibleMap(map)
+            }
+          } else {
+            const [map, ops] = await Promise.all([
+              loadModelResponsibleMap(filteredModels.map((m) => m.id)),
+              loadOperators(),
+            ])
+            if (!cancelled) {
+              setModelResponsibleMap(map)
+              setOperatorsForResponsible(ops)
+            }
+          }
+        }
+    }
+    loadData()
+      .catch((err) => {
+        if (!cancelled) setLoadError(err?.message ?? 'Ошибка загрузки данных')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
     return () => { cancelled = true }
-  }, [])
+  }, [isResponsibleRole, responsibleOperatorId])
 
   const persistModels = async (next: ModelRow[]) => {
     setModels(next)
@@ -175,7 +218,7 @@ export default function ModelsPage() {
   const filtered = useMemo(() => {
     let list = models
     if (statusFilter) {
-      list = list.filter((m) => m.status === statusFilter || (statusFilter === 'Стажировка' && m.status === 'Сажировка'))
+      list = list.filter((m) => m.status === statusFilter || (statusFilter === 'Стажировка' && m.status === 'Стажировка'))
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase()
@@ -198,7 +241,7 @@ export default function ModelsPage() {
     if (searchLower) filteredPairRows = filteredPairRows.filter((row) => row.label.toLowerCase().includes(searchLower))
     if (statusFilter) {
       filteredPairRows = filteredPairRows.filter(
-        (row) => row.status === statusFilter || (statusFilter === 'Стажировка' && row.status === 'Сажировка')
+        (row) => row.status === statusFilter || (statusFilter === 'Стажировка' && row.status === 'Стажировка')
       )
     }
     const modelRows = [...filtered].reverse().map((model) => ({ type: 'model' as const, model }))
@@ -239,6 +282,25 @@ export default function ModelsPage() {
     })
     setAddForm({ fullName: '', phone: '', birthDate: '' })
     setAddModalOpen(false)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center p-8">
+        <p className="text-zinc-400">Загрузка моделей и пар…</p>
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="p-8">
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-400">
+          {loadError}
+        </div>
+        <p className="mt-2 text-sm text-zinc-500">Проверьте подключение к Supabase и повторите попытку.</p>
+      </div>
+    )
   }
 
   return (
@@ -413,7 +475,7 @@ export default function ModelsPage() {
                   : 'bg-sky-500/25 text-sky-300 ring-sky-400/40 hover:bg-sky-500/35'
               }`}
             >
-              Сажировка
+              Стажировка
             </button>
             <button
               type="button"
@@ -439,37 +501,39 @@ export default function ModelsPage() {
             </button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setAddModalOpen(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-600"
-          >
-            <PlusIcon />
-            Добавить модель
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedToDeleteId(null)
-              setDeleteModalOpen(true)
-            }}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-400/50 bg-red-500/20 px-4 py-2.5 text-sm font-medium text-red-400 transition hover:bg-red-500/30"
-          >
-            <TrashIcon />
-            Удалить модель
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedForPair([])
-              setPairModalOpen(true)
-            }}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-white/10"
-          >
-            Сделать пару
-          </button>
-        </div>
+        {!isResponsibleRole && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setAddModalOpen(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-600"
+            >
+              <PlusIcon />
+              Добавить модель
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedToDeleteId(null)
+                setDeleteModalOpen(true)
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-400/50 bg-red-500/20 px-4 py-2.5 text-sm font-medium text-red-400 transition hover:bg-red-500/30"
+            >
+              <TrashIcon />
+              Удалить модель
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedForPair([])
+                setPairModalOpen(true)
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-white/10"
+            >
+              Сделать пару
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Модальное окно «Сделать пару» */}
@@ -597,6 +661,7 @@ export default function ModelsPage() {
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-400">Телефон</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-400">Статус</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-400">Дата рождения</th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-400">Ответственный</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-400">Действия</th>
             </tr>
           </thead>
@@ -615,6 +680,7 @@ export default function ModelsPage() {
                   <td className="px-4 py-3">
                     <StatusBadge status={row.status} />
                   </td>
+                  <td className="px-4 py-3 text-sm text-zinc-400">—</td>
                   <td className="px-4 py-3 text-sm text-zinc-400">—</td>
                   <td className="px-4 py-3">
                     <Link
@@ -638,6 +704,11 @@ export default function ModelsPage() {
                     <StatusBadge status={row.model.status} />
                   </td>
                   <td className="px-4 py-3 text-sm text-zinc-400">{row.model.birthDate ?? '—'}</td>
+                  <td className="px-4 py-3 text-sm text-zinc-400">
+                    {modelResponsibleMap[row.model.id]
+                      ? (operatorsForResponsible.find((o) => o.id === modelResponsibleMap[row.model.id])?.fullName ?? '—')
+                      : '—'}
+                  </td>
                   <td className="px-4 py-3">
                     <Link
                       href={`/dashboard/models/${row.model.id}`}
@@ -654,8 +725,12 @@ export default function ModelsPage() {
         </table>
       </div>
 
-      {filtered.length === 0 && (
-        <p className="mt-6 text-center text-sm text-zinc-500">По вашему запросу ничего не найдено</p>
+      {displayRows.length === 0 && (
+        <p className="mt-6 text-center text-sm text-zinc-500">
+          {models.length === 0 && pairs.length === 0
+            ? 'Нет моделей и пар. Добавьте первую модель.'
+            : 'По вашему запросу ничего не найдено'}
+        </p>
       )}
     </div>
   )

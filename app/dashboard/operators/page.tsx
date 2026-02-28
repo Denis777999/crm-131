@@ -1,13 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
   loadOperators,
   saveOperators,
+  loadOperatorsByAssignedResponsible,
   getResponsibleList,
   type OperatorRow,
 } from '@/lib/crmDb'
+import { useResponsibleRole } from '@/contexts/ResponsibleRoleContext'
 import { OPERATOR_STATUSES } from '@/lib/crmStorage'
 
 export type { OperatorRow }
@@ -59,6 +61,7 @@ function formatBirthDate(isoOrDisplay: string | null): string {
 }
 
 export default function OperatorsPage() {
+  const { isResponsibleRole, responsibleOperatorId } = useResponsibleRole()
   const [operators, setOperators] = useState<OperatorRow[]>([])
   const [responsibleIds, setResponsibleIds] = useState<string[]>([])
   const [addModalOpen, setAddModalOpen] = useState(false)
@@ -67,23 +70,54 @@ export default function OperatorsPage() {
   const [actionOpenId, setActionOpenId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | OperatorRow['status']>('all')
 
-  const responsibleSet = new Set(responsibleIds)
-  const operatorsFilteredByResponsible = operators.filter((op) => !responsibleSet.has(op.id))
+  const [listLoading, setListLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const operatorsFilteredFromResponsibles =
+    responsibleIds.length > 0 ? operators.filter((op) => !responsibleIds.includes(op.id)) : operators
   const operatorsToShow =
     statusFilter === 'all'
-      ? operatorsFilteredByResponsible
-      : operatorsFilteredByResponsible.filter((op) => (op.status ?? 'работает') === statusFilter)
+      ? operatorsFilteredFromResponsibles
+      : operatorsFilteredFromResponsibles.filter((op) => (op.status ?? 'работает') === statusFilter)
+
+  const loadList = useCallback(async () => {
+    setLoadError(null)
+    setListLoading(true)
+    try {
+      if (isResponsibleRole && responsibleOperatorId) {
+        const list = await loadOperatorsByAssignedResponsible(responsibleOperatorId)
+        setOperators(list)
+        setResponsibleIds([])
+        return list
+      }
+      const [allOps, respIds] = await Promise.all([loadOperators(), getResponsibleList()])
+      setOperators(allOps)
+      setResponsibleIds(respIds)
+      return allOps
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Не удалось загрузить список операторов')
+      setOperators([])
+      setResponsibleIds([])
+      return []
+    } finally {
+      setListLoading(false)
+    }
+  }, [isResponsibleRole, responsibleOperatorId])
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([loadOperators(), getResponsibleList()]).then(([list, ids]) => {
-      if (!cancelled) {
-        setOperators(list)
-        setResponsibleIds(ids)
+    let retryId: ReturnType<typeof setTimeout> | null = null
+    loadList().then((list) => {
+      if (cancelled) return
+      if (list && list.length === 0) {
+        retryId = setTimeout(() => { if (!cancelled) loadList() }, 2000)
       }
     })
-    return () => { cancelled = true }
-  }, [])
+    return () => {
+      cancelled = true
+      if (retryId) clearTimeout(retryId)
+    }
+  }, [loadList])
 
   const persistOperators = async (next: OperatorRow[]) => {
     setOperators(next)
@@ -111,10 +145,20 @@ export default function OperatorsPage() {
       phone: addForm.phone.trim() || null,
       photoUrl: null,
       status: 'работает',
+      crmAccessLogin: addForm.login.trim() || null,
+      crmAccessPassword: addForm.password ? addForm.password : null,
     }
     const nextList = [...operators, newOperator]
-    setOperators(nextList)
-    await saveOperators(nextList)
+
+    try {
+      await saveOperators(nextList)
+    } catch (err) {
+      setAddAccountError(err instanceof Error ? err.message : 'Не удалось сохранить оператора. Попробуйте ещё раз.')
+      return
+    }
+
+    const savedList = await loadOperators()
+    setOperators(savedList)
 
     const login = addForm.login.trim()
     const password = addForm.password
@@ -170,25 +214,38 @@ export default function OperatorsPage() {
     <div className="p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link href="/dashboard" className="text-sm text-zinc-400 hover:text-zinc-200">← Главная</Link>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleAddOperator}
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500"
-          >
-            Добавить оператора
-          </button>
-        </div>
+        {!isResponsibleRole && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleAddOperator}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500"
+            >
+              Добавить оператора
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-white">Операторы</h1>
           <p className="mt-1 text-zinc-400">
-            {operatorsToShow.length === 0 ? 'Список пуст. Добавьте оператора.' : `Всего: ${operatorsToShow.length}`}
+            {listLoading ? 'Загрузка...' : operatorsToShow.length === 0 ? 'Список пуст. Добавьте оператора или нажмите «Обновить».' : `Всего: ${operatorsToShow.length}`}
           </p>
+          {loadError && (
+            <p className="mt-2 text-sm text-red-400">{loadError}</p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => loadList()}
+            disabled={listLoading}
+            className="rounded-lg border border-white/20 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+          >
+            Обновить
+          </button>
           <button
             type="button"
             onClick={() => setStatusFilter('all')}

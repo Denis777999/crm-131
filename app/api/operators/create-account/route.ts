@@ -75,43 +75,49 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data: operatorAccount } = await admin
-    .from('crm_operator_accounts')
-    .select('tenant_user_id')
-    .eq('auth_user_id', sessionUserId)
-    .maybeSingle()
+  const { data: teamRow } = await admin.from('crm_teams').select('id').eq('owner_auth_id', sessionUserId).maybeSingle()
+  const useNewSchema = !!teamRow?.id
 
-  const tenantUserId = operatorAccount?.tenant_user_id ?? sessionUserId
+  const tenantUserId = useNewSchema ? sessionUserId : (
+    (await admin.from('crm_operator_accounts').select('tenant_user_id').eq('auth_user_id', sessionUserId).maybeSingle())
+    .data?.tenant_user_id ?? sessionUserId
+  )
 
-  let opRow: { full_name: string | null } | null = (
-    await admin
-      .from('crm_operators')
-      .select('full_name')
-      .eq('user_id', tenantUserId)
-      .eq('id', operatorId.trim())
-      .maybeSingle()
-  ).data
+  const teamId = teamRow?.id ?? null
+
+  let opRow: { full_name: string | null } | null = useNewSchema && teamId
+    ? (await admin.from('crm_users').select('full_name').eq('team_id', teamId).eq('id', operatorId.trim()).maybeSingle()).data
+    : (await admin.from('crm_operators').select('full_name').eq('user_id', tenantUserId).eq('id', operatorId.trim()).maybeSingle()).data
 
   if (!opRow && fullName?.trim()) {
-    const { error: insertErr } = await admin.from('crm_operators').insert({
-      id: operatorId.trim(),
-      user_id: tenantUserId,
-      full_name: fullName.trim(),
-      birth_date: null,
-      phone: null,
-      photo_url: null,
-      status: 'работает',
-    })
-    if (!insertErr) {
-      opRow = { full_name: fullName.trim() }
-    } else if (insertErr.code === '23505') {
-      const { data: retry } = await admin
-        .from('crm_operators')
-        .select('full_name')
-        .eq('user_id', tenantUserId)
-        .eq('id', operatorId.trim())
-        .maybeSingle()
-      if (retry) opRow = retry
+    if (useNewSchema && teamId) {
+      const { error: insertErr } = await admin.from('crm_users').upsert({
+        id: operatorId.trim(),
+        team_id: teamId,
+        role: 'operator',
+        full_name: fullName.trim(),
+        birth_date: null,
+        phone: null,
+        photo_url: null,
+        status: 'работает',
+      }, { onConflict: 'id,team_id' })
+      if (!insertErr) opRow = { full_name: fullName.trim() }
+    } else {
+      const { error: insertErr } = await admin.from('crm_operators').insert({
+        id: operatorId.trim(),
+        user_id: tenantUserId,
+        full_name: fullName.trim(),
+        birth_date: null,
+        phone: null,
+        photo_url: null,
+        status: 'работает',
+      })
+      if (!insertErr) {
+        opRow = { full_name: fullName.trim() }
+      } else if (insertErr.code === '23505') {
+        const { data: retry } = await admin.from('crm_operators').select('full_name').eq('user_id', tenantUserId).eq('id', operatorId.trim()).maybeSingle()
+        if (retry) opRow = retry
+      }
     }
   }
 
@@ -150,21 +156,41 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Не удалось создать пользователя' }, { status: 500 })
   }
 
-  const { error: insertError } = await admin
-    .from('crm_operator_accounts')
-    .insert({
-      auth_user_id: newUser.user.id,
-      tenant_user_id: tenantUserId,
-      operator_id: operatorId.trim(),
-      operator_full_name: operatorFullName,
-    })
+  if (useNewSchema && teamId) {
+    const { error: updateErr } = await admin
+      .from('crm_users')
+      .update({
+        auth_user_id: newUser.user.id,
+        crm_access_login: login.trim(),
+        crm_access_password: password,
+        full_name: operatorFullName,
+      })
+      .eq('id', operatorId.trim())
+      .eq('team_id', teamId)
+    if (updateErr) {
+      await admin.auth.admin.deleteUser(newUser.user.id).catch(() => {})
+      return NextResponse.json(
+        { error: updateErr.message || 'Не удалось привязать учётную запись к оператору' },
+        { status: 500 }
+      )
+    }
+  } else {
+    const { error: insertError } = await admin
+      .from('crm_operator_accounts')
+      .insert({
+        auth_user_id: newUser.user.id,
+        tenant_user_id: tenantUserId,
+        operator_id: operatorId.trim(),
+        operator_full_name: operatorFullName,
+      })
 
-  if (insertError) {
-    await admin.auth.admin.deleteUser(newUser.user.id).catch(() => {})
-    return NextResponse.json(
-      { error: insertError.message || 'Не удалось привязать учётную запись к оператору' },
-      { status: 500 }
-    )
+    if (insertError) {
+      await admin.auth.admin.deleteUser(newUser.user.id).catch(() => {})
+      return NextResponse.json(
+        { error: insertError.message || 'Не удалось привязать учётную запись к оператору' },
+        { status: 500 }
+      )
+    }
   }
 
   return NextResponse.json({

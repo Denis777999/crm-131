@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { useOperatorView } from '@/contexts/OperatorViewContext'
+import { useResponsibleRole } from '@/contexts/ResponsibleRoleContext'
 import { loadOperators } from '@/lib/crmDb'
 
 type NavChild = { href: string; label: string }
@@ -17,20 +18,21 @@ type NavItem = {
 const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Главная', icon: HomeIcon },
   { href: '/dashboard/models', label: 'Модели', icon: UsersIcon },
-  { href: '/dashboard/teams', label: 'Команды', icon: TeamsIcon },
   {
     href: '/dashboard/finance',
     label: 'Финансы',
     icon: DocIcon,
     children: [
       { href: '/dashboard/finance/week', label: 'Отчет неделя' },
-      { href: '/dashboard/finance/month', label: 'Отчет месяц' },
+      { href: '/dashboard/finance/responsible', label: 'Отчет по ответственным' },
       { href: '/dashboard/finance/conclusions', label: 'Выводы' },
     ],
   },
   { href: '/dashboard/shifts', label: 'Смены', icon: ClockIcon },
   { href: '/dashboard/responsible', label: 'Ответственный', icon: PersonIcon },
+  { href: '/dashboard/teams', label: 'Команды', icon: TeamsIcon },
   { href: '/dashboard/operators', label: 'Операторы', icon: OperatorsIcon },
+  { href: '/dashboard/schedule', label: 'Расписание', icon: CalendarIcon },
   {
     href: '/dashboard/training',
     label: 'Обучение',
@@ -51,10 +53,38 @@ const navItems: NavItem[] = [
   { href: '/dashboard/support', label: 'Служба поддержки', icon: HeadsetIcon },
 ]
 
-/** Меню для роли оператора: только Главная и Смены */
+/** Меню для роли оператора: Главная, Смены, Расписание */
 const operatorNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Главная', icon: HomeIcon },
   { href: '/dashboard/shifts', label: 'Смены', icon: ClockIcon },
+  { href: '/dashboard/schedule', label: 'Расписание', icon: CalendarIcon },
+]
+
+/** Меню для роли ответственного: Главная, Модели, Финансы, Смены, Команды, Операторы, Расписание, Обучение */
+const responsibleNavItems: NavItem[] = [
+  { href: '/dashboard', label: 'Главная', icon: HomeIcon },
+  { href: '/dashboard/models', label: 'Модели', icon: UsersIcon },
+  {
+    href: '/dashboard/finance',
+    label: 'Финансы',
+    icon: DocIcon,
+    children: [{ href: '/dashboard/finance/responsible', label: 'Отчет по ответственным' }],
+  },
+  { href: '/dashboard/shifts', label: 'Смены', icon: ClockIcon },
+  { href: '/dashboard/teams', label: 'Команды', icon: TeamsIcon },
+  { href: '/dashboard/operators', label: 'Операторы', icon: OperatorsIcon },
+  { href: '/dashboard/schedule', label: 'Расписание', icon: CalendarIcon },
+  {
+    href: '/dashboard/training',
+    label: 'Обучение',
+    icon: TrainingIcon,
+    children: [
+      { href: '/dashboard/training/operators', label: 'Операторы' },
+      { href: '/dashboard/training/interns', label: 'Интеры' },
+      { href: '/dashboard/training/responsible', label: 'Ответственные' },
+      { href: '/dashboard/training/curators', label: 'Кураторы' },
+    ],
+  },
 ]
 
 function HomeIcon() {
@@ -111,6 +141,16 @@ function OperatorsIcon() {
     </svg>
   )
 }
+function CalendarIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  )
+}
 function TrainingIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -162,11 +202,12 @@ export default function DashboardSidebar() {
   const pathname = usePathname()
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const { operatorName, setOperatorName, isRealOperatorLogin } = useOperatorView()
+  const { isResponsibleRole } = useResponsibleRole()
   const [operatorModalOpen, setOperatorModalOpen] = useState(false)
   const [operatorsList, setOperatorsList] = useState<{ id: string; fullName: string }[]>([])
 
   const isOperatorView = Boolean(operatorName)
-  const items = isOperatorView ? operatorNavItems : navItems
+  const items = isResponsibleRole ? responsibleNavItems : isOperatorView ? operatorNavItems : navItems
 
   useEffect(() => {
     const next: Record<string, boolean> = {}
@@ -283,9 +324,11 @@ export default function DashboardSidebar() {
         })}
       </nav>
 
-      {/* Режим оператора */}
+      {/* Режим оператора / роль ответственного */}
       <div className="border-t border-white/10 p-3">
-        {isOperatorView ? (
+        {isResponsibleRole ? (
+          <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Роль: Ответственный</p>
+        ) : isOperatorView ? (
           <div className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Режим оператора</p>
             <p className="truncate text-sm font-medium text-emerald-400">{operatorName}</p>
@@ -313,7 +356,7 @@ export default function DashboardSidebar() {
               </button>
             )}
           </div>
-        ) : (
+        ) : !isResponsibleRole ? (
           <button
             type="button"
             onClick={() => setOperatorModalOpen(true)}
@@ -321,7 +364,7 @@ export default function DashboardSidebar() {
           >
             Войти как оператор
           </button>
-        )}
+        ) : null}
       </div>
 
       {/* Модальное окно выбора оператора */}

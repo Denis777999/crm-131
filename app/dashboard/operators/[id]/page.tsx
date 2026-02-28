@@ -8,11 +8,10 @@ import {
   saveOperators,
   loadOperatorPhotos,
   saveOperatorPhotos,
-  loadShifts,
-  loadAccessesForModelOrPair,
+  getResponsibleList,
+  getOperatorAssignedResponsibleId,
+  setOperatorAssignedResponsibleId,
   type OperatorRow,
-  type ShiftRow,
-  type SiteAccessItem,
 } from '@/lib/crmDb'
 
 const MAX_PHOTOS = 4
@@ -100,19 +99,32 @@ function TrashIcon({ className }: { className?: string }) {
   )
 }
 
+function PhotoIcon({ className }: { className?: string }) {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <polyline points="21 15 16 10 5 21" />
+    </svg>
+  )
+}
+
 export default function OperatorDetailPage() {
   const params = useParams()
   const id = typeof params?.id === 'string' ? params.id : ''
   const [operator, setOperator] = useState<OperatorRow | null>(null)
+  const [operatorsList, setOperatorsList] = useState<OperatorRow[]>([])
   const [photos, setPhotos] = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
-  const [editForm, setEditForm] = useState({ fullName: '', birthDate: '', phone: '' })
+  const [assignResponsibleModalOpen, setAssignResponsibleModalOpen] = useState(false)
+  const [responsibleIds, setResponsibleIds] = useState<string[]>([])
+  const [assignedResponsibleId, setAssignedResponsibleId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState({ fullName: '', birthDate: '', phone: '', crmAccessLogin: '', crmAccessPassword: '' })
   const [editPhotos, setEditPhotos] = useState<string[]>([])
   const [photoError, setPhotoError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [operatorShifts, setOperatorShifts] = useState<ShiftRow[]>([])
-  const [shiftAccesses, setShiftAccesses] = useState<Record<string, SiteAccessItem[]>>({})
+  const [photoPopoverOpen, setPhotoPopoverOpen] = useState(false)
 
   const refreshOperator = useCallback(async () => {
     if (!id) return
@@ -126,44 +138,18 @@ export default function OperatorDetailPage() {
       return
     }
     let cancelled = false
-    Promise.all([loadOperators(), loadOperatorPhotos(id)]).then(([list, urls]) => {
+    Promise.all([loadOperators(), loadOperatorPhotos(id), getResponsibleList(), getOperatorAssignedResponsibleId(id)]).then(([list, urls, respIds, assignedId]) => {
       if (!cancelled) {
+        setOperatorsList(list)
         setOperator(list.find((o) => o.id === id) ?? null)
         setPhotos(urls.slice(0, MAX_PHOTOS))
+        setResponsibleIds(respIds)
+        setAssignedResponsibleId(assignedId)
         setLoaded(true)
       }
     })
     return () => { cancelled = true }
   }, [id])
-
-  // Смены этого оператора и доступы (логин/пароль) по модели/паре смены
-  useEffect(() => {
-    if (!operator?.fullName) {
-      setOperatorShifts([])
-      setShiftAccesses({})
-      return
-    }
-    let cancelled = false
-    loadShifts().then((all) => {
-      if (cancelled) return
-      const byOperator = all.filter((s) => (s.operator || '').trim() === (operator?.fullName || '').trim())
-      setOperatorShifts(byOperator)
-      const modelIds = [...new Set(byOperator.map((s) => s.modelId).filter(Boolean))]
-      if (modelIds.length === 0) {
-        setShiftAccesses({})
-        return
-      }
-      Promise.all(modelIds.map((mid) => loadAccessesForModelOrPair(mid))).then((accessLists) => {
-        if (cancelled) return
-        const next: Record<string, SiteAccessItem[]> = {}
-        modelIds.forEach((mid, i) => {
-          next[mid] = accessLists[i] ?? []
-        })
-        setShiftAccesses(next)
-      })
-    })
-    return () => { cancelled = true }
-  }, [operator?.fullName])
 
   const displayPhotos = photos.length > 0 ? photos : (operator?.photoUrl ? [operator.photoUrl] : [])
 
@@ -173,6 +159,8 @@ export default function OperatorDetailPage() {
       fullName: operator.fullName,
       birthDate: birthDateToInputValue(operator.birthDate),
       phone: operator.phone || '',
+      crmAccessLogin: operator.crmAccessLogin ?? '',
+      crmAccessPassword: operator.crmAccessPassword ?? '',
     })
     setEditPhotos(photos.length > 0 ? [...photos] : (operator.photoUrl ? [operator.photoUrl] : []))
     setPhotoError(null)
@@ -225,6 +213,8 @@ export default function OperatorDetailPage() {
       birthDate,
       phone: editForm.phone.trim() || null,
       photoUrl: editPhotos[0] || null,
+      crmAccessLogin: editForm.crmAccessLogin.trim() || null,
+      crmAccessPassword: editForm.crmAccessPassword || null,
     }
     const list = await loadOperators()
     const idx = list.findIndex((o) => o.id === operator.id)
@@ -254,7 +244,40 @@ export default function OperatorDetailPage() {
 
   return (
     <div className="p-8">
-      <Link href="/dashboard/operators" className="text-sm text-zinc-400 hover:text-zinc-200">← К списку операторов</Link>
+      <div className="flex items-center justify-between gap-4">
+        <Link href="/dashboard/operators" className="text-sm text-zinc-400 hover:text-zinc-200">← К списку операторов</Link>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setPhotoPopoverOpen((v) => !v)}
+            className="rounded-lg p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
+            aria-label="Карточка сотрудника"
+          >
+            <PhotoIcon />
+          </button>
+          {photoPopoverOpen && (
+            <>
+              <div className="fixed inset-0 z-40" aria-hidden onClick={() => setPhotoPopoverOpen(false)} />
+              <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-white/10 bg-[#1a1f2e] p-4 shadow-xl">
+                <div className="flex flex-col items-center text-center">
+                  {displayPhotos.length > 0 ? (
+                    <div className="h-20 w-20 overflow-hidden rounded-full bg-white/10">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={displayPhotos[0]} alt="" className="h-full w-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white/10 text-zinc-500">
+                      <PhotoIcon className="h-10 w-10" />
+                    </div>
+                  )}
+                  <p className="mt-3 font-medium text-white">{operator.fullName}</p>
+                  <p className="mt-0.5 text-sm text-zinc-400">Оператор</p>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
 
       <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -304,69 +327,109 @@ export default function OperatorDetailPage() {
               <span className="block text-xs font-medium uppercase tracking-wider text-zinc-500">Номер</span>
               <p className="mt-1 text-zinc-200">{operator.phone || '—'}</p>
             </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div>
+                <span className="block text-xs font-medium uppercase tracking-wider text-zinc-500">Ответственный</span>
+                <p className="mt-1 text-zinc-200">
+                  {assignedResponsibleId
+                    ? (operatorsList.find((o) => o.id === assignedResponsibleId)?.fullName ?? '—')
+                    : '—'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAssignResponsibleModalOpen(true)}
+                className="rounded-lg border border-white/20 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-white/10 hover:text-white"
+              >
+                Назначить ответственного
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Логин и пароль (доступы по сменам) */}
-      <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-white">Логин и пароль</h2>
-            <p className="mt-1 text-sm text-zinc-400">
-              Доступы к сайтам по сменам (модель/пара, выбранная при добавлении смены).
+      {/* Модальное окно: назначить ответственного */}
+      {assignResponsibleModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setAssignResponsibleModalOpen(false)} aria-hidden />
+          <div className="relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-[#1a1f2e] p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-white">Назначить ответственного</h2>
+              <button
+                type="button"
+                onClick={() => setAssignResponsibleModalOpen(false)}
+                className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
+                aria-label="Закрыть"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+            <p className="mb-4 text-sm text-zinc-400">
+              Выберите ответственного из списка. Список формируется на странице «Ответственный».
             </p>
-          </div>
-          <Link
-            href="/dashboard/shifts"
-            className="shrink-0 rounded-lg border border-white/20 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-white/10 hover:text-white"
-          >
-            Редактировать
-          </Link>
-        </div>
-        {operatorShifts.length === 0 ? (
-          <p className="mt-4 text-zinc-500">У этого оператора пока нет смен.</p>
-        ) : (
-          <ul className="mt-4 space-y-4">
-            {operatorShifts.map((shift) => {
-              const accesses = shiftAccesses[shift.modelId] ?? []
-              const withCredentials = accesses.filter((a) => (a.login ?? '').trim() || (a.password ?? '').trim())
-              return (
-                <li key={shift.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-                    <span className="font-medium text-white">{shift.modelLabel || shift.modelId || '—'}</span>
-                    {shift.operatorDate && (
-                      <span className="text-zinc-500">
-                        {shift.operatorDate.replace('T', ' ').slice(0, 16)}
-                      </span>
-                    )}
-                  </div>
-                  {withCredentials.length === 0 ? (
-                    <p className="text-sm text-zinc-500">Нет сохранённых доступов для этой модели/пары.</p>
-                  ) : (
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {withCredentials.map((a) => (
-                        <div
-                          key={a.site}
-                          className="rounded-lg border border-white/10 bg-black/20 px-3 py-2"
-                        >
-                          <p className="text-xs font-medium text-zinc-400">{a.site}</p>
-                          <p className="mt-0.5 text-sm text-zinc-200">
-                            Логин: {a.login?.trim() || '—'}
-                          </p>
-                          <p className="text-sm text-zinc-200">
-                            Пароль: {a.password?.trim() || '—'}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+            {responsibleIds.length === 0 ? (
+              <p className="py-4 text-center text-zinc-500">
+                Список ответственных пуст. Добавьте ответственных на странице{' '}
+                <Link href="/dashboard/responsible" className="text-emerald-400 hover:underline">Ответственный</Link>.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                <li>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!operator) return
+                      await setOperatorAssignedResponsibleId(operator.id, null)
+                      setAssignedResponsibleId(null)
+                      setAssignResponsibleModalOpen(false)
+                    }}
+                    className={`w-full rounded-xl border px-4 py-3 text-left text-sm transition ${
+                      !assignedResponsibleId
+                        ? 'border-emerald-500/50 bg-emerald-500/10 text-white'
+                        : 'border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    <span className="font-medium">Не назначен</span>
+                  </button>
                 </li>
-              )
-            })}
-          </ul>
-        )}
-      </div>
+                {responsibleIds
+                  .map((rid) => operatorsList.find((o) => o.id === rid))
+                  .filter((op): op is OperatorRow => op != null)
+                  .map((op) => (
+                    <li key={op.id}>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!operator) return
+                          await setOperatorAssignedResponsibleId(operator.id, op.id)
+                          setAssignedResponsibleId(op.id)
+                          setAssignResponsibleModalOpen(false)
+                        }}
+                        className={`w-full rounded-xl border px-4 py-3 text-left text-sm transition ${
+                          assignedResponsibleId === op.id
+                            ? 'border-emerald-500/50 bg-emerald-500/10 text-white'
+                            : 'border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        <span className="font-medium">{op.fullName}</span>
+                        {op.phone && <span className="ml-2 text-zinc-500">{op.phone}</span>}
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            )}
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setAssignResponsibleModalOpen(false)}
+                className="rounded-xl border border-white/20 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:bg-white/10"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Модальное окно редактирования */}
       {editModalOpen && (
@@ -453,6 +516,33 @@ export default function OperatorDetailPage() {
                   placeholder="+7 (999) 123-45-67"
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 />
+              </div>
+              <div className="border-t border-white/10 pt-4">
+                <p className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-500">Доступ к CRM системе</p>
+                <div className="space-y-3">
+                  <div>
+                    <label htmlFor="edit-crmLogin" className="mb-1.5 block text-sm font-medium text-zinc-300">Логин</label>
+                    <input
+                      id="edit-crmLogin"
+                      type="text"
+                      value={editForm.crmAccessLogin}
+                      onChange={(e) => setEditForm((f) => ({ ...f, crmAccessLogin: e.target.value }))}
+                      placeholder="Логин для входа в CRM"
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="edit-crmPassword" className="mb-1.5 block text-sm font-medium text-zinc-300">Пароль</label>
+                    <input
+                      id="edit-crmPassword"
+                      type="text"
+                      value={editForm.crmAccessPassword}
+                      onChange={(e) => setEditForm((f) => ({ ...f, crmAccessPassword: e.target.value }))}
+                      placeholder="Пароль для входа в CRM"
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                    />
+                  </div>
+                </div>
               </div>
               {saveError && <p className="text-sm text-red-400">{saveError}</p>}
               <div className="flex justify-end gap-3 pt-2">

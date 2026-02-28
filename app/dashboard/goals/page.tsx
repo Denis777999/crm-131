@@ -3,11 +3,11 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { getSupabase } from '@/lib/supabaseClient'
+import { loadGoals, saveGoals, type GoalRow } from '@/lib/crmDb'
 
 export default function GoalsPage() {
   const router = useRouter()
-  const [goal, setGoal] = useState<any>(null)
+  const [goal, setGoal] = useState<GoalRow | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -15,31 +15,16 @@ export default function GoalsPage() {
   }, [])
 
   const load = async () => {
-    const supabase = getSupabase()
-    if (!supabase) {
-      setGoal(null)
-      setLoading(false)
-      return
-    }
-    const { data } = await supabase
-      .from('goals')
-      .select('*')
-      .limit(1)
-      .single()
-
-    setGoal(data)
+    const data = await loadGoals()
+    setGoal(data ?? null)
     setLoading(false)
   }
 
   const save = async () => {
     if (!goal) return
-    const supabase = getSupabase()
-    if (!supabase) {
-      alert('Сервис недоступен. Проверьте настройки.')
-      return
-    }
     const num = (v: unknown) => (typeof v === 'number' && !Number.isNaN(v) ? v : 0)
-    const payload: Record<string, number> = {
+    const payload: GoalRow = {
+      id: goal.id,
       teams: num(goal.teams),
       week_revenue: num(goal.week_revenue),
       month_revenue: num(goal.month_revenue),
@@ -49,7 +34,7 @@ export default function GoalsPage() {
       current_month_revenue: num(goal.current_month_revenue),
       current_staff: num(goal.current_staff),
     }
-    await supabase.from('goals').update(payload).eq('id', goal.id)
+    await saveGoals(payload)
     alert('Сохранено ✅')
     router.push('/dashboard')
   }
@@ -91,8 +76,8 @@ export default function GoalsPage() {
                 <input
                   type="number"
                   min={0}
-                  value={goal.current_teams ?? ''}
-                  onChange={e => setGoal({ ...goal, current_teams: e.target.value === '' ? undefined : Number(e.target.value) })}
+                  value={goal.current_teams ?? 0}
+                  onChange={e => setGoal({ ...goal, current_teams: e.target.value === '' ? 0 : Number(e.target.value) })}
                   placeholder="0"
                   className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-white placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 />
@@ -120,8 +105,8 @@ export default function GoalsPage() {
                 <input
                   type="number"
                   min={0}
-                  value={goal.current_week_revenue ?? ''}
-                  onChange={e => setGoal({ ...goal, current_week_revenue: e.target.value === '' ? undefined : Number(e.target.value) })}
+                  value={goal.current_week_revenue ?? 0}
+                  onChange={e => setGoal({ ...goal, current_week_revenue: e.target.value === '' ? 0 : Number(e.target.value) })}
                   placeholder="0"
                   className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-white placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 />
@@ -149,8 +134,8 @@ export default function GoalsPage() {
                 <input
                   type="number"
                   min={0}
-                  value={goal.current_month_revenue ?? ''}
-                  onChange={e => setGoal({ ...goal, current_month_revenue: e.target.value === '' ? undefined : Number(e.target.value) })}
+                  value={goal.current_month_revenue ?? 0}
+                  onChange={e => setGoal({ ...goal, current_month_revenue: e.target.value === '' ? 0 : Number(e.target.value) })}
                   placeholder="0"
                   className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-white placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 />
@@ -178,8 +163,8 @@ export default function GoalsPage() {
                 <input
                   type="number"
                   min={0}
-                  value={goal.current_staff ?? ''}
-                  onChange={e => setGoal({ ...goal, current_staff: e.target.value === '' ? undefined : Number(e.target.value) })}
+                  value={goal.current_staff ?? 0}
+                  onChange={e => setGoal({ ...goal, current_staff: e.target.value === '' ? 0 : Number(e.target.value) })}
                   placeholder="0"
                   className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-white placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 />

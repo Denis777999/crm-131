@@ -12,6 +12,7 @@ const pageTitles: Record<string, string> = {
   '/dashboard/models': 'Модели',
   '/dashboard/teams': 'Команды',
   '/dashboard/finance': 'Финансы',
+  '/dashboard/finance/responsible': 'Отчет по ответственным',
   '/dashboard/shifts': 'Смены',
   '/dashboard/operators': 'Операторы',
   '/dashboard/training': 'Обучение',

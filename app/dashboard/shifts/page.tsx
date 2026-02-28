@@ -5,16 +5,21 @@ import Link from 'next/link'
 import {
   loadShifts,
   saveShifts,
+  ensureShiftsFromTemplates,
+  deleteExpiredUnstartedShifts,
   loadModelsAndPairsForSelect,
   loadAccessesForModelOrPair,
   loadModelInfo,
   loadOperators,
+  loadModelsByResponsibleOperator,
+  loadPairs,
   type ShiftRow,
   type SiteAccessItem,
   type ModelOption,
   type OperatorRow,
 } from '@/lib/crmDb'
 import { useOperatorView } from '@/contexts/OperatorViewContext'
+import { useResponsibleRole } from '@/contexts/ResponsibleRoleContext'
 
 const SITE_ACCESS_SITES = ['Stripchat', 'Chaturbate', 'Cam4', 'Livejasmin', 'My.club', 'Camsoda', 'Crypto'] as const
 
@@ -117,9 +122,9 @@ const defaultAddForm = {
   date: '',
 }
 
-const emptyModelInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: '', description: null }
+const emptyModelInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: '', description: null, responsibleOperatorId: null }
 
-/** Дата из operatorDate (YYYY-MM-DD или YYYY-MM-DD HH:mm) для сравнения с «последние 7 дней». */
+/** Дата из operatorDate (YYYY-MM-DD или YYYY-MM-DD HH:mm) для сравнения с «последние 14 дней». */
 function parseShiftDate(operatorDate: string | null): Date | null {
   if (!operatorDate || !operatorDate.trim()) return null
   const s = operatorDate.trim().replace('T', ' ').slice(0, 10)
@@ -127,8 +132,19 @@ function parseShiftDate(operatorDate: string | null): Date | null {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+/** Время начала смены в ms для сортировки (новые сверху). */
+function getShiftStartMs(s: ShiftRow): number {
+  const raw = (s.start || s.operatorDate || '').trim()
+  if (!raw) return 0
+  const [datePart, timePart] = raw.includes(' ') ? raw.split(' ') : [raw, '00:00']
+  const [h = '0', m = '0'] = (timePart || '00:00').slice(0, 5).split(':')
+  const ms = new Date(`${datePart}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`).getTime()
+  return Number.isNaN(ms) ? 0 : ms
+}
+
 export default function ShiftsPage() {
   const { operatorName } = useOperatorView()
+  const { isResponsibleRole, responsibleOperatorId } = useResponsibleRole()
   const isOperatorView = Boolean(operatorName)
 
   const [search, setSearch] = useState('')
@@ -143,6 +159,8 @@ export default function ShiftsPage() {
   const [selectedAccesses, setSelectedAccesses] = useState<SiteAccessItem[]>([])
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [selectedShiftIdToDelete, setSelectedShiftIdToDelete] = useState<string | null>(null)
+  const [responsibleAllowedModelIds, setResponsibleAllowedModelIds] = useState<Set<string> | null>(null)
+  const [responsiblePairs, setResponsiblePairs] = useState<{ id: string; modelIds: string[] }[]>([])
 
   useEffect(() => {
     if (!addForm.modelId) { setSelectedAccesses([]); return }
@@ -151,11 +169,29 @@ export default function ShiftsPage() {
 
   useEffect(() => {
     let cancelled = false
-    loadShifts().then((list) => {
-      if (!cancelled) setShifts(list.length > 0 ? list : [])
-    })
+    ensureShiftsFromTemplates()
+      .then(() => deleteExpiredUnstartedShifts())
+      .then(() => loadShifts())
+      .then((list) => {
+        if (!cancelled) setShifts(list.length > 0 ? list : [])
+      })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (!isResponsibleRole || !responsibleOperatorId) {
+      setResponsibleAllowedModelIds(null)
+      setResponsiblePairs([])
+      return
+    }
+    let cancelled = false
+    Promise.all([loadModelsByResponsibleOperator(responsibleOperatorId), loadPairs()]).then(([byResp, pairs]) => {
+      if (cancelled) return
+      setResponsibleAllowedModelIds(new Set(byResp.map((r) => r.modelId)))
+      setResponsiblePairs(pairs)
+    })
+    return () => { cancelled = true }
+  }, [isResponsibleRole, responsibleOperatorId])
 
   useEffect(() => {
     const modelIds = [...new Set(shifts.map((s) => s.modelId).filter((id) => id && !id.includes('-')))]
@@ -196,34 +232,78 @@ export default function ShiftsPage() {
     return () => document.removeEventListener('click', close)
   }, [operatorSelectOpen])
 
-  /** В режиме оператора: только смены на него за последние 7 дней */
-  const operatorShifts = useMemo(() => {
-    if (!isOperatorView || !operatorName) return shifts
-    const limit = new Date()
-    limit.setDate(limit.getDate() - 7)
-    limit.setHours(0, 0, 0, 0)
+  /** Для роли ответственного: только смены моделей, назначенных ему */
+  const responsibleFilteredShifts = useMemo(() => {
+    if (!isResponsibleRole || !responsibleAllowedModelIds?.size) return shifts
     return shifts.filter((s) => {
+      const mid = s.modelId
+      if (mid.includes('-')) {
+        const pair = responsiblePairs.find((p) => p.id === mid)
+        return pair ? pair.modelIds.every((id) => responsibleAllowedModelIds.has(String(id))) : false
+      }
+      return responsibleAllowedModelIds.has(mid)
+    })
+  }, [shifts, isResponsibleRole, responsibleAllowedModelIds, responsiblePairs])
+
+  const baseShifts = isResponsibleRole ? (responsibleAllowedModelIds ? responsibleFilteredShifts : []) : shifts
+
+  /** В режиме оператора: только смены на него за последние 14 дней */
+  const operatorShifts = useMemo(() => {
+    if (!isOperatorView || !operatorName) return baseShifts
+    const limit = new Date()
+    limit.setDate(limit.getDate() - 14)
+    limit.setHours(0, 0, 0, 0)
+    return baseShifts.filter((s) => {
       if (s.operator.trim() !== operatorName.trim()) return false
       const d = parseShiftDate(s.operatorDate)
       if (!d) return false
       return d >= limit
     })
-  }, [shifts, isOperatorView, operatorName])
+  }, [baseShifts, isOperatorView, operatorName])
+
+  /** Сегодня в формате YYYY-MM-DD (локальная дата) */
+  const todayYmd = useMemo(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }, [])
+
+  /**
+   * Завершённые смены показываем всегда.
+   * Смены «Ожидает» и «В работе» — только за сегодня; на завтра и другие дни не показываем.
+   */
+  const statusFilteredShifts = useMemo(() => {
+    const base = isOperatorView ? operatorShifts : baseShifts
+    return base.filter((s) => {
+      if (s.status === 'Завершена') return true
+      if (s.status === 'Ожидает' || s.status === 'В работе') {
+        const shiftDate = (s.operatorDate || s.start || '').trim()
+        const ymd = shiftDate.includes(' ') ? shiftDate.split(' ')[0] : shiftDate.slice(0, 10)
+        return ymd === todayYmd
+      }
+      return true
+    })
+  }, [baseShifts, operatorShifts, isOperatorView, todayYmd])
 
   const filtered = useMemo(() => {
-    const base = isOperatorView ? operatorShifts : shifts
-    if (!search.trim()) return base
+    const base = statusFilteredShifts
     const q = search.trim().toLowerCase()
-    return base.filter(
-      (s) =>
-        s.operator.toLowerCase().includes(q) ||
-        s.modelLabel.toLowerCase().includes(q) ||
-        (s.operatorDate && s.operatorDate.toLowerCase().includes(q)) ||
-        (s.responsible && s.responsible.toLowerCase().includes(q))
-    )
-  }, [shifts, operatorShifts, isOperatorView, search])
+    const list = !q
+      ? base
+      : base.filter(
+          (s) =>
+            s.operator.toLowerCase().includes(q) ||
+            s.modelLabel.toLowerCase().includes(q) ||
+            (s.operatorDate && s.operatorDate.toLowerCase().includes(q)) ||
+            (s.responsible && s.responsible.toLowerCase().includes(q))
+        )
+    return [...list].sort((a, b) => {
+      const ta = getShiftStartMs(a)
+      const tb = getShiftStartMs(b)
+      return tb - ta
+    })
+  }, [statusFilteredShifts, search])
 
-  const total = isOperatorView ? operatorShifts.length : shifts.length
+  const total = statusFilteredShifts.length
   const shown = filtered.length
 
   const handleAddShift = (e: React.FormEvent) => {
@@ -247,6 +327,7 @@ export default function ShiftsPage() {
       operatorDate,
       status: 'Ожидает',
       check: null,
+      checkCalculated: null,
       bonuses: null,
       start: null,
       end: null,
@@ -582,7 +663,7 @@ export default function ShiftsPage() {
         <span aria-hidden>/</span>
         <span className="text-zinc-500">Окно (Смены)</span>
         <span aria-hidden>/</span>
-        <span className="text-zinc-300">{isOperatorView ? 'Мои смены (7 дней)' : 'Страница смен'}</span>
+        <span className="text-zinc-300">{isOperatorView ? 'Мои смены (14 дней)' : 'Страница смен'}</span>
       </nav>
 
       {/* Заголовок и кнопки */}
@@ -594,11 +675,11 @@ export default function ShiftsPage() {
           <div>
             <h1 className="text-2xl font-semibold text-white">Смены</h1>
             {isOperatorView && (
-              <p className="mt-0.5 text-sm text-zinc-400">Смены на вас за последние 7 дней</p>
+              <p className="mt-0.5 text-sm text-zinc-400">Смены на вас за последние 14 дней</p>
             )}
           </div>
         </div>
-        {!isOperatorView && (
+        {!isOperatorView && !isResponsibleRole && (
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -682,7 +763,27 @@ export default function ShiftsPage() {
                 <td className="px-4 py-3">
                   <StatusBadge status={shift.status} />
                 </td>
-                <td className="px-4 py-3 text-sm text-zinc-400">{shift.check != null && String(shift.check).trim() !== '' ? `${shift.check} $` : '—'}</td>
+                <td className="px-4 py-3 text-sm">
+                  {shift.check != null && String(shift.check).trim() !== '' ? (
+                    (() => {
+                      const opCheck = parseFloat(String(shift.check).replace(/,/g, '.'))
+                      const botCheck = shift.checkCalculated != null && String(shift.checkCalculated).trim() !== ''
+                        ? parseFloat(String(shift.checkCalculated).replace(/,/g, '.'))
+                        : NaN
+                      const mismatch = !Number.isNaN(opCheck) && !Number.isNaN(botCheck) && Math.abs(opCheck - botCheck) > 0.01
+                      return (
+                        <span
+                          className={mismatch ? 'font-medium text-red-400' : 'text-zinc-400'}
+                          title={mismatch ? `Не совпадает с расчётом бота (гроф чек: ${shift.checkCalculated} $)` : undefined}
+                        >
+                          {shift.check} $
+                        </span>
+                      )
+                    })()
+                  ) : (
+                    <span className="text-zinc-400">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-sm text-zinc-400">{shift.bonuses != null && String(shift.bonuses).trim() !== '' ? `${shift.bonuses} $` : '—'}</td>
                 <td className="px-4 py-3 text-sm text-zinc-400">{shift.start ? (shift.start.includes(' ') ? shift.start.split(' ')[1] : shift.start) : '—'}</td>
                 <td className="px-4 py-3 text-sm text-zinc-400">{shift.end ? (shift.end.includes(' ') ? shift.end.split(' ')[1] : shift.end) : '—'}</td>

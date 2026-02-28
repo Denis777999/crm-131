@@ -16,6 +16,10 @@ export type OperatorRow = {
   phone: string | null
   photoUrl: string | null
   status: OperatorStatus
+  /** Доступ к CRM системе (логин, вписывается при добавлении оператора) */
+  crmAccessLogin?: string | null
+  /** Доступ к CRM системе (пароль, вписывается при добавлении оператора) */
+  crmAccessPassword?: string | null
 }
 
 export function loadOperatorsFromStorage(): OperatorRow[] {

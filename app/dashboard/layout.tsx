@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabase } from '@/lib/supabaseClient'
 import { OperatorViewProvider } from '@/contexts/OperatorViewContext'
+import { ResponsibleRoleProvider } from '@/contexts/ResponsibleRoleContext'
 import DashboardSidebar from '@/components/DashboardSidebar'
 import RecentPagesTracker from '@/components/RecentPagesTracker'
+import RedirectResponsibleGuard from '@/components/RedirectResponsibleGuard'
 
 export default function DashboardLayout({
   children,
@@ -16,20 +18,25 @@ export default function DashboardLayout({
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const supabase = getSupabase()
-      if (!supabase) {
-        router.push('/login')
-        return
-      }
-      const { data } = await supabase.auth.getSession()
-      if (!data.session) {
-        router.push('/login')
-        return
-      }
+    const supabase = getSupabase()
+    if (!supabase) {
       setLoading(false)
+      router.push('/login')
+      return
     }
-    checkAuth()
+    const timeoutId = setTimeout(() => setLoading(false), 8000)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setLoading(false)
+      if (!session) router.push('/login')
+    })
+    supabase.auth.getSession().then(({ data }) => {
+      setLoading(false)
+      if (!data.session) router.push('/login')
+    })
+    return () => {
+      clearTimeout(timeoutId)
+      subscription.unsubscribe()
+    }
   }, [router])
 
   if (loading) {
@@ -42,13 +49,16 @@ export default function DashboardLayout({
 
   return (
     <OperatorViewProvider>
-      <div className="flex min-h-screen bg-[#111827] text-zinc-100">
-        <RecentPagesTracker />
-        <DashboardSidebar />
-        <main className="min-h-screen flex-1 overflow-auto">
-          {children}
-        </main>
-      </div>
+      <ResponsibleRoleProvider>
+        <RedirectResponsibleGuard />
+        <div className="flex min-h-screen bg-[#111827] text-zinc-100">
+          <RecentPagesTracker />
+          <DashboardSidebar />
+          <main className="min-h-screen flex-1 overflow-auto">
+            {children}
+          </main>
+        </div>
+      </ResponsibleRoleProvider>
     </OperatorViewProvider>
   )
 }

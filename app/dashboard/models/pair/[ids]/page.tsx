@@ -37,7 +37,7 @@ type ModelInfo = {
   description: string | null
 }
 
-const emptyInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: 'Работает', description: null }
+const emptyInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: 'Работает', description: null, responsibleOperatorId: null }
 
 function getAccessForSite(accesses: SiteAccessItem[], site: string): SiteAccessItem | undefined {
   return accesses.find((a) => a.site === site)

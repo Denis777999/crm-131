@@ -21,7 +21,7 @@ type ShiftRow = {
   end: string | null
 }
 
-const emptyInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: '', description: null }
+const emptyInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: '', description: null, responsibleOperatorId: null }
 
 function getShiftDate(shift: ShiftRow): string | null {
   const dateStr = shift.operatorDate || shift.start

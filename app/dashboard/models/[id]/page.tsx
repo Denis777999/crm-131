@@ -14,14 +14,18 @@ import {
   saveModelAccesses,
   loadModelComments,
   saveModelComments,
+  loadOperators,
+  getResponsibleList,
   type SiteAccessItem,
   type ModelInfo,
   type CommentItem,
 } from '@/lib/crmDb'
+import type { OperatorRow } from '@/lib/crmStorage'
 
 const MIN_PHOTOS = 1
 
-const SITE_ACCESS_SITES = ['Stripchat', 'Chaturbate', 'Cam4', 'Livejasmin', 'My.club', 'Camsoda', 'Crypto'] as const
+/** Основные сайты — показываются у каждой модели; остальные добавляются через «+ сайт» */
+const SITE_ACCESS_SITES = ['Stripchat', 'Chaturbate', 'My.club'] as const
 
 export type { SiteAccessItem }
 
@@ -74,12 +78,12 @@ function compressImageFile(file: File): Promise<string> {
 }
 
 const MOCK: Record<string, ModelInfo> = {
-  '1': { fullName: 'Конотопская Полина денискина', birthDate: '15.03.1995', phone: '+7 (999) 123-45-67', link1: null, link2: null, status: 'Работает', description: null },
-  '2': { fullName: 'Смирнова Анна Александровна', birthDate: '22.07.1998', phone: '+7 (999) 234-56-78', link1: null, link2: null, status: 'pending', description: null },
-  '3': { fullName: 'Петрова Мария Игоревна', birthDate: '08.11.1993', phone: '+7 (999) 345-67-89', link1: null, link2: null, status: 'Работает', description: null },
-  '4': { fullName: 'Тест', birthDate: null, phone: '+7(999)000-00-00', link1: null, link2: null, status: 'Работает', description: null },
-  '5': { fullName: 'Ф Полина фы', birthDate: null, phone: null, link1: null, link2: null, status: 'Работает', description: null },
-  '6': { fullName: 'Der Полина денискина', birthDate: '09.06.2028', phone: null, link1: null, link2: null, status: 'Работает', description: null },
+  '1': { fullName: 'Конотопская Полина денискина', birthDate: '15.03.1995', phone: '+7 (999) 123-45-67', link1: null, link2: null, status: 'Работает', description: null, responsibleOperatorId: null },
+  '2': { fullName: 'Смирнова Анна Александровна', birthDate: '22.07.1998', phone: '+7 (999) 234-56-78', link1: null, link2: null, status: 'pending', description: null, responsibleOperatorId: null },
+  '3': { fullName: 'Петрова Мария Игоревна', birthDate: '08.11.1993', phone: '+7 (999) 345-67-89', link1: null, link2: null, status: 'Работает', description: null, responsibleOperatorId: null },
+  '4': { fullName: 'Тест', birthDate: null, phone: '+7(999)000-00-00', link1: null, link2: null, status: 'Работает', description: null, responsibleOperatorId: null },
+  '5': { fullName: 'Ф Полина фы', birthDate: null, phone: null, link1: null, link2: null, status: 'Работает', description: null, responsibleOperatorId: null },
+  '6': { fullName: 'Der Полина денискина', birthDate: '09.06.2028', phone: null, link1: null, link2: null, status: 'Работает', description: null, responsibleOperatorId: null },
 }
 
 export type { CommentItem }
@@ -100,6 +104,74 @@ function GlobeIcon({ className }: { className?: string }) {
       <line x1="2" y1="12" x2="22" y2="12" />
       <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
     </svg>
+  )
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}
+
+function ResponsibleSelect({
+  value,
+  options,
+  onChange,
+  placeholder,
+}: {
+  value: string
+  options: OperatorRow[]
+  onChange: (id: string | null) => void
+  placeholder: string
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const selected = options.find((o) => o.id === value)
+  const display = selected ? (selected.fullName || selected.id) : placeholder
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-left text-sm text-zinc-200 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+      >
+        <span className={value ? '' : 'text-zinc-500'}>{display}</span>
+        <ChevronDownIcon className={`shrink-0 text-zinc-400 transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 right-0 z-10 mt-1 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-[#1a1f2e] shadow-xl">
+          <button
+            type="button"
+            onClick={() => { onChange(null); setOpen(false) }}
+            className={`block w-full px-4 py-2.5 text-left text-sm transition hover:bg-white/10 ${value ? 'text-zinc-200' : 'bg-emerald-500/20 text-emerald-300'}`}
+          >
+            {placeholder}
+          </button>
+          {options.map((op) => (
+            <button
+              key={op.id}
+              type="button"
+              onClick={() => { onChange(op.id); setOpen(false) }}
+              className={`block w-full px-4 py-2.5 text-left text-sm transition hover:bg-white/10 ${value === op.id ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-200'}`}
+            >
+              {op.fullName || op.id}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -143,7 +215,7 @@ function ChevronRight({ className }: { className?: string }) {
   )
 }
 
-const emptyFallback: ModelInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: 'Работает', description: null }
+const emptyFallback: ModelInfo = { fullName: '', birthDate: null, phone: null, link1: null, link2: null, status: 'Работает', description: null, responsibleOperatorId: null }
 
 export default function ModelCardPage() {
   const params = useParams()
@@ -162,6 +234,8 @@ export default function ModelCardPage() {
   const [accesses, setAccesses] = useState<SiteAccessItem[]>([])
   const [accessEditModalOpen, setAccessEditModalOpen] = useState(false)
   const [accessEditForm, setAccessEditForm] = useState<SiteAccessItem[]>([])
+  const [operatorsList, setOperatorsList] = useState<OperatorRow[]>([])
+  const [responsibleIds, setResponsibleIds] = useState<string[]>([])
   const [photoUploadModalOpen, setPhotoUploadModalOpen] = useState(false)
   const [pendingPhotoFiles, setPendingPhotoFiles] = useState<File[]>([])
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null)
@@ -174,7 +248,7 @@ export default function ModelCardPage() {
     Promise.all([
       loadModels().then((list) => {
         const m = list.find((x) => x.id === id)
-        return m ? { fullName: m.fullName, birthDate: m.birthDate, phone: m.phone, link1: null, link2: null, status: m.status, description: null } : fallback
+        return m ? { ...fallback, fullName: m.fullName, birthDate: m.birthDate, phone: m.phone, link1: null, link2: null, status: m.status, description: null } : fallback
       }),
       loadModelInfo(id, fallback),
       loadModelPhotos(id),
@@ -191,6 +265,17 @@ export default function ModelCardPage() {
     })
     return () => { cancelled = true }
   }, [id, fallbackFromMock])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([loadOperators(), getResponsibleList()]).then(([operators, ids]) => {
+      if (!cancelled) {
+        setOperatorsList(operators)
+        setResponsibleIds(ids)
+      }
+    })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     const loadUser = async () => {
@@ -300,6 +385,7 @@ export default function ModelCardPage() {
       link2: model.link2,
       status: validStatus,
       description: model.description,
+      responsibleOperatorId: model.responsibleOperatorId ?? null,
     })
     setEditModalOpen(true)
   }
@@ -315,17 +401,27 @@ export default function ModelCardPage() {
   }
 
   const openAccessEditModal = () => {
-    const form = SITE_ACCESS_SITES.map((site) => {
+    const fromFixed = SITE_ACCESS_SITES.map((site) => {
       const cur = getAccessForSite(accesses, site)
       return { site, login: cur?.login ?? '', password: cur?.password ?? '' }
     })
-    setAccessEditForm(form)
+    const customSites = accesses.filter((a) => !(SITE_ACCESS_SITES as readonly string[]).includes(a.site))
+    const fromCustom = customSites.map((a) => ({ site: a.site, login: a.login ?? '', password: a.password ?? '' }))
+    setAccessEditForm([...fromFixed, ...fromCustom])
     setAccessEditModalOpen(true)
+  }
+
+  const addAccessSite = () => {
+    setAccessEditForm((prev) => [...prev, { site: '', login: '', password: '' }])
+  }
+
+  const removeAccessSite = (index: number) => {
+    setAccessEditForm((prev) => prev.filter((_, i) => i !== index))
   }
 
   const handleSaveAccessEdit = (e: React.FormEvent) => {
     e.preventDefault()
-    const next = accessEditForm.filter((a) => a.login.trim() || a.password.trim())
+    const next = accessEditForm.filter((a) => (a.site?.trim() || a.login.trim() || a.password.trim()))
     setAccesses(next)
     if (id && typeof window !== 'undefined') {
       if (id) saveModelAccesses(id, next)
@@ -418,6 +514,15 @@ export default function ModelCardPage() {
                 </div>
               </div>
               <div>
+                <label className="mb-1 block text-xs text-zinc-500">Назначить ответственного</label>
+                <ResponsibleSelect
+                  value={editForm.responsibleOperatorId ?? ''}
+                  options={operatorsList.filter((op) => responsibleIds.includes(op.id))}
+                  onChange={(id) => setEditForm((f) => ({ ...f, responsibleOperatorId: id || null }))}
+                  placeholder="— не назначен"
+                />
+              </div>
+              <div>
                 <label className="mb-1 block text-xs text-zinc-500">Описание</label>
                 <textarea
                   value={editForm.description ?? ''}
@@ -463,35 +568,71 @@ export default function ModelCardPage() {
               </button>
             </div>
             <form onSubmit={handleSaveAccessEdit} className="space-y-4">
-              {accessEditForm.map((row, index) => (
-                <div key={row.site} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                  <p className="mb-2 text-xs font-medium text-zinc-400">{row.site}</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="text"
-                      placeholder="Логин"
-                      value={row.login}
-                      onChange={(e) => {
-                        const next = [...accessEditForm]
-                        next[index] = { ...next[index], login: e.target.value }
-                        setAccessEditForm(next)
-                      }}
-                      className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Пароль"
-                      value={row.password}
-                      onChange={(e) => {
-                        const next = [...accessEditForm]
-                        next[index] = { ...next[index], password: e.target.value }
-                        setAccessEditForm(next)
-                      }}
-                      className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                    />
+              {accessEditForm.map((row, index) => {
+                const isCustomSite = !(SITE_ACCESS_SITES as readonly string[]).includes(row.site)
+                return (
+                  <div key={row.site ? `${row.site}-${index}` : `new-${index}`} className="rounded-lg border border-white/10 bg-white/5 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      {isCustomSite ? (
+                        <input
+                          type="text"
+                          placeholder="Название сайта"
+                          value={row.site}
+                          onChange={(e) => {
+                            const next = [...accessEditForm]
+                            next[index] = { ...next[index], site: e.target.value }
+                            setAccessEditForm(next)
+                          }}
+                          className="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-zinc-400 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                        />
+                      ) : (
+                        <p className="text-xs font-medium text-zinc-400">{row.site}</p>
+                      )}
+                      {isCustomSite && (
+                        <button
+                          type="button"
+                          onClick={() => removeAccessSite(index)}
+                          className="rounded p-1 text-zinc-500 hover:bg-white/10 hover:text-white"
+                          aria-label="Удалить сайт"
+                        >
+                          <CloseIcon className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Логин"
+                        value={row.login}
+                        onChange={(e) => {
+                          const next = [...accessEditForm]
+                          next[index] = { ...next[index], login: e.target.value }
+                          setAccessEditForm(next)
+                        }}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Пароль"
+                        value={row.password}
+                        onChange={(e) => {
+                          const next = [...accessEditForm]
+                          next[index] = { ...next[index], password: e.target.value }
+                          setAccessEditForm(next)
+                        }}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
+              <button
+                type="button"
+                onClick={addAccessSite}
+                className="w-full rounded-xl border border-dashed border-white/20 py-2.5 text-sm font-medium text-zinc-400 transition hover:border-emerald-500/50 hover:bg-white/5 hover:text-zinc-200"
+              >
+                + сайт
+              </button>
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
@@ -636,6 +777,14 @@ export default function ModelCardPage() {
               </dd>
             </div>
             <div>
+              <dt className="text-xs text-zinc-500">Ответственный</dt>
+              <dd className="mt-0.5 text-sm text-zinc-200">
+                {model.responsibleOperatorId
+                  ? (operatorsList.find((o) => o.id === model.responsibleOperatorId)?.fullName) ?? '—'
+                  : '—'}
+              </dd>
+            </div>
+            <div>
               <dt className="text-xs text-zinc-500">Описание</dt>
               <dd className="mt-0.5 text-sm text-zinc-200 whitespace-pre-wrap">{model.description ?? '—'}</dd>
             </div>
@@ -658,15 +807,15 @@ export default function ModelCardPage() {
             Доступы к сайтам
           </h2>
           <div className="space-y-3">
-            {SITE_ACCESS_SITES.map((site) => {
+            {[...SITE_ACCESS_SITES, ...accesses.map((a) => a.site).filter((s) => !(SITE_ACCESS_SITES as readonly string[]).includes(s))].map((site, i) => {
               const item = getAccessForSite(accesses, site)
               const display = item?.login && item?.password ? `${item.login} - ${item.password}` : item?.login || item?.password || '—'
               return (
                 <div
-                  key={site}
+                  key={site ? `${site}-${i}` : `custom-${i}`}
                   className="rounded-lg border border-white/10 bg-white/5 px-4 py-3"
                 >
-                  <p className="text-xs font-medium text-zinc-400">{site}</p>
+                  <p className="text-xs font-medium text-zinc-400">{site || '—'}</p>
                   <p className="mt-0.5 text-sm text-zinc-200">{display}</p>
                 </div>
               )

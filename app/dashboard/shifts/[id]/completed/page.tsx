@@ -61,6 +61,8 @@ export default function ShiftCompletedPage() {
   const [bonuses, setBonuses] = useState<Record<string, string>>({})
   const [accesses, setAccesses] = useState<SiteAccessItem[]>([])
   const [editingEarnings, setEditingEarnings] = useState(false)
+  /** Итог в $, который вписывает оператор (чек). Если не совпадает с расчётом бота — на странице смен показывается красным. */
+  const [checkInput, setCheckInput] = useState('')
 
   useEffect(() => {
     if (!id) return
@@ -77,6 +79,7 @@ export default function ShiftCompletedPage() {
         setPhotos([...startP, ...endP].slice(0, MAX_PHOTOS_TOTAL))
         setEarnings(e)
         setBonuses(b)
+        setCheckInput(s?.check != null && String(s.check).trim() !== '' ? String(s.check).trim() : '')
       }
     })
     return () => { cancelled = true }
@@ -126,13 +129,17 @@ export default function ShiftCompletedPage() {
     saveShiftBonuses(id, next)
   }
 
+  /** Расчёт бота: сумма жетонов по сайтам / 20 = ожидаемый чек в $ (гроф чек). */
+  const totalTokens = sumNumericValues(earnings)
+  const checkCalculated = totalTokens > 0 ? (totalTokens / 20).toFixed(2) : null
+
   const handleSaveEarnings = async () => {
     if (!id) return
     await Promise.all([saveShiftEarnings(id, earnings), saveShiftBonuses(id, bonuses)])
-    const totalEarnings = sumNumericValues(earnings)
     const totalBonuses = sumNumericValues(bonuses)
     const updated = await updateShift(id, {
-      check: String(totalEarnings + totalBonuses),
+      check: checkInput.trim() !== '' ? checkInput.trim() : null,
+      checkCalculated: checkCalculated ?? null,
       bonuses: String(totalBonuses),
     })
     if (updated) setShift(updated)
@@ -180,11 +187,11 @@ export default function ShiftCompletedPage() {
                     {editingEarnings ? (
                       <>
                         <div className="w-24">
-                          <label htmlFor={`completed-earnings-${site}`} className="mb-1 block text-xs text-zinc-500">Заработок</label>
+                          <label htmlFor={`completed-earnings-${site}`} className="mb-1 block text-xs text-zinc-500">Жетоны</label>
                           <input
                             id={`completed-earnings-${site}`}
                             type="text"
-                            inputMode="decimal"
+                            inputMode="numeric"
                             placeholder="0"
                             value={earnings[site] ?? ''}
                             onChange={(e) => setEarningForSite(site, e.target.value)}
@@ -207,7 +214,7 @@ export default function ShiftCompletedPage() {
                     ) : (
                       <div className="flex gap-4 text-right">
                         <div>
-                          <p className="text-xs text-zinc-500">Заработок</p>
+                          <p className="text-xs text-zinc-500">Жетоны</p>
                           <p className="text-sm font-medium text-zinc-200">{earning}</p>
                         </div>
                         <div>
@@ -263,8 +270,28 @@ export default function ShiftCompletedPage() {
               <dd className="mt-0.5 text-sm text-zinc-200">{shift.end ?? '—'}</dd>
             </div>
             <div>
-              <dt className="text-xs text-zinc-500">Чек (сумма)</dt>
-              <dd className="mt-0.5 text-sm text-zinc-200">{shift.check ?? '—'}</dd>
+              <dt className="text-xs text-zinc-500">Гроф чек (расчёт бота: жетоны ÷ 20)</dt>
+              <dd className="mt-0.5 text-sm font-medium text-emerald-400">
+                {shift.checkCalculated != null && String(shift.checkCalculated).trim() !== '' ? `${shift.checkCalculated} $` : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-zinc-500">Чек (итог в $, вписывает оператор)</dt>
+              {editingEarnings ? (
+                <dd className="mt-0.5">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={checkInput}
+                    onChange={(e) => setCheckInput(e.target.value)}
+                    className="w-28 rounded-lg border border-white/10 bg-white/5 px-2 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-blue-500/50 focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                  />
+                  <span className="ml-1 text-sm text-zinc-400">$</span>
+                </dd>
+              ) : (
+                <dd className="mt-0.5 text-sm text-zinc-200">{shift.check != null && String(shift.check).trim() !== '' ? `${shift.check} $` : '—'}</dd>
+              )}
             </div>
             <div>
               <dt className="text-xs text-zinc-500">Бонусы (сумма)</dt>
